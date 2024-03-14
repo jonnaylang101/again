@@ -17,8 +17,9 @@ var DefaultWhitelist = []int{
 }
 
 type retryTransport struct {
-	transport http.RoundTripper
-	whitelist []int
+	transport  http.RoundTripper
+	whitelist  []int
+	maxRetries int
 }
 
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -53,13 +54,28 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 type ClientOptions struct {
-	Transport http.RoundTripper
+	Transport  http.RoundTripper
+	Whitelist  []int
+	MaxRetries int
 }
 
-func NewClient() *http.Client {
+type ClientOption func(*ClientOptions)
+
+func NewClient(maxRetries int, options ...ClientOption) *http.Client {
+	ops := &ClientOptions{
+		Transport:  http.DefaultTransport,
+		Whitelist:  DefaultWhitelist,
+		MaxRetries: maxRetries,
+	}
+
+	for _, opt := range options {
+		opt(ops)
+	}
+
 	t := &retryTransport{
-		transport: http.DefaultTransport,
-		whitelist: DefaultWhitelist,
+		transport:  ops.Transport,
+		whitelist:  ops.Whitelist,
+		maxRetries: ops.MaxRetries,
 	}
 
 	return &http.Client{
