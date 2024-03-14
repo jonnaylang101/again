@@ -1,8 +1,11 @@
 package again
 
 import (
+	"bytes"
 	"io"
 	"net/http"
+
+	"github.com/cenkalti/backoff"
 )
 
 var DefaultWhitelist = []int{
@@ -19,6 +22,31 @@ type retryTransport struct {
 }
 
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	byt, err := cacheRequestBody(req)
+	if err != nil {
+		return nil, err
+	}
+
+	operation := func() error {
+		req.Body = io.NopCloser(bytes.NewBuffer(byt))
+		res, err := t.transport.RoundTrip(req)
+		if err != nil {
+			return err
+		}
+
+		for _, code := range t.whitelist {
+			if res.StatusCode == code {
+				flushResponseBody(res)
+				return err
+			}
+		}
+
+		return backoff.Permanent(err)
+	}
+
+	if err = backoff.Retry(operation, backoff.NewExponentialBackOff()); err != nil {
+		return nil, err
+	}
 
 	var res *http.Response
 	return res, nil

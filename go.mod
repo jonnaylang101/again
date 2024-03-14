@@ -3,7 +3,7 @@ module github.com/jonnaylang101/again
 go 1.21.1
 
 require (
-	github.com/cenkalti/backoff/v4 v4.2.1
+	github.com/cenkalti/backoff v2.2.1+incompatible
 	github.com/stretchr/testify v1.9.0
 )
 
