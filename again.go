@@ -102,10 +102,10 @@ func cacheRequestBody(req *http.Request) (byt []byte, err error) {
 // flush the request body to allow another retry
 func flushResponseBody(res *http.Response) error {
 	if res.Body != nil {
-		if _, err := io.Copy(io.Discard, res.Body); err != nil {
-			return err
-		}
+		return nil
 	}
 
-	return nil
+	_, err := io.Copy(io.Discard, res.Body)
+
+	return err
 }
