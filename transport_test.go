@@ -2,11 +2,13 @@ package again
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"os"
 	"testing"
 
+	"github.com/cenkalti/backoff"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -53,6 +55,107 @@ func Test_flushResponseBody(t *testing.T) {
 		require.NoError(t, err)
 		assert.Equal(t, []byte{}, actual)
 	})
+}
+
+func Test_retryTransport_try(t *testing.T) {
+	t.Run("when the RoundTripper setup errors, we should return a non-retryable error", func(t *testing.T) {
+		whitelist := []int{
+			http.StatusTooManyRequests,
+			http.StatusBadGateway,
+		}
+
+		expect := errors.New("some error message")
+
+		transport := &retryTransport{
+			transport: &stubRoundTripper{
+				res: nil,
+				err: expect,
+			},
+			whitelist: whitelist,
+		}
+
+		err := transport.try(&http.Request{}, []byte{})()
+		assert.ErrorContains(t, err, expect.Error())
+	})
+
+	t.Run("when the status code is in the whitelist, we should return a retryable error", func(t *testing.T) {
+		whitelist := []int{
+			http.StatusTooManyRequests,
+			http.StatusBadGateway,
+		}
+
+		transport := &retryTransport{
+			transport: &stubRoundTripper{
+				res: &http.Response{
+					StatusCode: http.StatusTooManyRequests,
+					Body:       io.NopCloser(bytes.NewBuffer([]byte("res body data"))),
+				},
+				err: nil,
+			},
+			whitelist: whitelist,
+		}
+
+		err := transport.try(&http.Request{}, []byte("body data"))()
+
+		assert.ErrorContains(t, err, "retryable error")
+		assert.False(t, errors.Is(err, (&backoff.PermanentError{})))
+	})
+
+	t.Run("when the status code is not in the whitelist, we should return a non-retryable error", func(t *testing.T) {
+		whitelist := []int{
+			http.StatusTooManyRequests,
+			http.StatusBadGateway,
+		}
+
+		transport := &retryTransport{
+			transport: &stubRoundTripper{
+				res: &http.Response{
+					StatusCode: http.StatusInternalServerError,
+					Body:       io.NopCloser(bytes.NewBuffer([]byte("res body data"))),
+				},
+				err: nil,
+			},
+			whitelist: whitelist,
+		}
+
+		op := transport.try(&http.Request{}, []byte{})
+
+		err := op()
+		assert.ErrorContains(t, err, "non-retryable error")
+		assert.IsType(t, &backoff.PermanentError{}, err)
+	})
+
+	t.Run("when the response body is currupt, we should return a non-retyable error", func(t *testing.T) {
+		whitelist := []int{
+			http.StatusTooManyRequests,
+			http.StatusBadGateway,
+		}
+
+		f, err := os.Create("file")
+		require.NoError(t, err)
+		f.Close()
+
+		t.Cleanup(func() {
+			os.Remove("file")
+		})
+
+		transport := &retryTransport{
+			transport: &stubRoundTripper{
+				res: &http.Response{
+					StatusCode: http.StatusTooManyRequests,
+					Body:       io.NopCloser(f),
+				},
+				err: nil,
+			},
+			whitelist: whitelist,
+		}
+
+		err = transport.try(&http.Request{}, []byte{})()
+
+		assert.ErrorContains(t, err, "non-retryable error")
+		assert.IsType(t, &backoff.PermanentError{}, err)
+	})
+
 }
 
 func Test_tryAgain(t *testing.T) {
@@ -102,4 +205,13 @@ func Test_retryTransport_RoundTrip(t *testing.T) {
 
 		assert.ErrorContains(t, err, "file already closed")
 	})
+}
+
+type stubRoundTripper struct {
+	res *http.Response
+	err error
+}
+
+func (srt *stubRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return srt.res, srt.err
 }

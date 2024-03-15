@@ -29,31 +29,39 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("[again.RoundTrip] failed to cache request body: %w", err)
 	}
 
-	operation := func() error {
-		req.Body = io.NopCloser(bytes.NewBuffer(body))
-		res, err := t.transport.RoundTrip(req)
-		if err != nil {
-			return backoff.Permanent(fmt.Errorf("[again.RoundTrip] RoundTrip definition error: %w", err))
-		}
-
-		if tryAgain(res.StatusCode, t.whitelist) {
-			if err = flushResponseBody(res); err != nil {
-				return backoff.Permanent(fmt.Errorf("[again.RoundTrip] failed to flush request body: %w", err))
-			}
-			return fmt.Errorf("[again.RoundTrip] failed with retryable error: %w", err)
-		}
-
-		return backoff.Permanent(fmt.Errorf("[again.RoundTrip] failed with non-retryable error: %w", err))
-	}
-
-	bo := backoff.WithMaxRetries(backoff.NewExponentialBackOff(), uint64(t.maxRetries))
-
-	if err = backoff.Retry(operation, bo); err != nil {
+	if err = backoff.Retry(
+		t.try(req, body),
+		backoff.WithMaxRetries(backoff.NewExponentialBackOff(), uint64(t.maxRetries)),
+	); err != nil {
 		return nil, err
 	}
 
 	var res *http.Response
 	return res, nil
+}
+
+var (
+	fmtErrNonRetryable = "[again.try] non-retryable error: %w"
+	fmtErrRetryable    = "[again.try] retryable error: %w"
+)
+
+func (t *retryTransport) try(req *http.Request, bodyData []byte) backoff.Operation {
+	return func() error {
+		req.Body = io.NopCloser(bytes.NewBuffer(bodyData))
+		res, err := t.transport.RoundTrip(req)
+		if err != nil {
+			return backoff.Permanent(fmt.Errorf(fmtErrNonRetryable, err))
+		}
+
+		if tryAgain(res.StatusCode, t.whitelist) {
+			if err = flushResponseBody(res); err != nil {
+				return backoff.Permanent(fmt.Errorf(fmtErrNonRetryable, err))
+			}
+			return fmt.Errorf(fmtErrRetryable, err)
+		}
+
+		return backoff.Permanent(fmt.Errorf(fmtErrNonRetryable, err))
+	}
 }
 
 // cache the request body in a new buffer for reuse in each retry
