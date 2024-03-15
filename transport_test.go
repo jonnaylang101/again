@@ -3,10 +3,13 @@ package again
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/cenkalti/backoff"
 	"github.com/stretchr/testify/assert"
@@ -35,6 +38,88 @@ func Test_retryTransport_RoundTrip(t *testing.T) {
 		_, err = retryTransport.RoundTrip(req)
 
 		assert.ErrorContains(t, err, "file already closed")
+	})
+
+	t.Run("when the request is retryable but we set maxRetries to 0, we should not retry", func(t *testing.T) {
+		whitelist := []int{
+			http.StatusTooManyRequests,
+			http.StatusBadGateway,
+		}
+
+		tryCount := 0
+
+		expectRes := &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(bytes.NewBuffer([]byte("res body data"))),
+		}
+
+		retryTransport := &retryTransport{
+			transport:  &stubRoundTripper{res: expectRes},
+			maxRetries: 1,
+			whitelist:  whitelist,
+			notifyFunc: func(err error, d time.Duration) {
+				tryCount++
+				fmt.Printf("tryCount: %d; after: %v\n", tryCount, d)
+			},
+		}
+
+		req := httptest.NewRequest(http.MethodPost, "http://localhost:8080/api", bytes.NewBuffer([]byte("hello")))
+		_, err := retryTransport.RoundTrip(req)
+
+		assert.ErrorContains(t, err, "final error")
+		assert.ErrorContains(t, err, http.StatusText(http.StatusTooManyRequests))
+		assert.Equal(t, 1, tryCount)
+		assert.Equal(t, expectRes, retryTransport.response)
+	})
+
+	t.Run("when the request is retryable but we set maxRetries to 3, we should retry 3 times", func(t *testing.T) {
+		whitelist := []int{
+			http.StatusTooManyRequests,
+			http.StatusBadGateway,
+		}
+		expectRetries := 3
+
+		tryCount := 0
+
+		expectRes := &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(bytes.NewBuffer([]byte("res body data"))),
+		}
+
+		retryTransport := &retryTransport{
+			transport: &stubRoundTripper{
+				res: expectRes,
+			},
+			maxRetries: expectRetries,
+			whitelist:  whitelist,
+			notifyFunc: func(err error, d time.Duration) {
+				tryCount++
+				fmt.Printf("tryCount: %d; after: %v\n", tryCount, d)
+			},
+		}
+
+		req := httptest.NewRequest(http.MethodPost, "http://localhost:8080/api", bytes.NewBuffer([]byte("hello")))
+		_, err := retryTransport.RoundTrip(req)
+
+		assert.ErrorContains(t, err, "final error")
+		assert.ErrorContains(t, err, http.StatusText(http.StatusTooManyRequests))
+		assert.Equal(t, expectRetries, tryCount)
+		assert.Equal(t, expectRes, retryTransport.response)
+	})
+
+	t.Run("when we set maxRetries to 0, we should not retry", func(t *testing.T) {
+		req := &http.Request{
+			Body: io.NopCloser(bytes.NewBuffer([]byte("hello"))),
+		}
+		retryTransport := &retryTransport{
+			transport:  http.DefaultTransport,
+			maxRetries: 0,
+		}
+
+		_, err := retryTransport.RoundTrip(req)
+
+		assert.ErrorContains(t, err, "non-retryable error")
+		assert.ErrorContains(t, err, "http: nil Request.URL")
 	})
 }
 
@@ -131,7 +216,7 @@ func Test_retryTransport_try(t *testing.T) {
 
 		err := transport.try(&http.Request{}, []byte("body data"))()
 
-		assert.ErrorContains(t, err, "retryable error")
+		assert.ErrorContains(t, err, "retry error")
 		assert.False(t, errors.Is(err, (&backoff.PermanentError{})))
 	})
 

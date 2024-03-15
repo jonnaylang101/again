@@ -2,6 +2,7 @@ package again
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -22,6 +23,8 @@ type retryTransport struct {
 	whitelist  []int
 	maxRetries int
 	notifyFunc backoff.Notify
+	response   *http.Response
+	retryCount int
 }
 
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -34,28 +37,38 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 
-	var res *http.Response
-	return res, nil
+	return t.response, nil
 }
 
 var (
-	fmtErrNonRetryable = "[again.try] non-retryable error: %w"
-	fmtErrRetryable    = "[again.try] retryable error: %w"
+	fmtErrNonRetryable = "[again.try] non-retryable error: %v"
+	fmtErrRetryable    = "[again.try] retry error: %v"
+	fmtErrFinal        = "[again.try] final error: %v"
 )
 
 func (t *retryTransport) try(req *http.Request, bodyData []byte) backoff.Operation {
 	return func() error {
+		var err error
 		req.Body = io.NopCloser(bytes.NewBuffer(bodyData))
 		res, err := t.transport.RoundTrip(req)
 		if err != nil {
 			return backoff.Permanent(fmt.Errorf(fmtErrNonRetryable, err))
 		}
 
+		t.response = res
+		if res.StatusCode < http.StatusBadRequest {
+			return nil
+		}
+
+		if t.retryCount++; t.retryCount > t.maxRetries {
+			return backoff.Permanent(fmt.Errorf(fmtErrFinal, errors.New(http.StatusText(res.StatusCode))))
+		}
+
 		if tryAgain(res.StatusCode, t.whitelist) {
 			if err = flushResponseBody(res); err != nil {
 				return backoff.Permanent(fmt.Errorf(fmtErrNonRetryable, err))
 			}
-			return fmt.Errorf(fmtErrRetryable, err)
+			return fmt.Errorf(fmtErrRetryable, errors.New(http.StatusText(res.StatusCode)))
 		}
 
 		return backoff.Permanent(fmt.Errorf(fmtErrNonRetryable, err))
