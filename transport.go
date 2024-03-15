@@ -21,6 +21,7 @@ type retryTransport struct {
 	transport  http.RoundTripper
 	whitelist  []int
 	maxRetries int
+	notifyFunc backoff.Notify
 }
 
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -29,10 +30,7 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("[again.RoundTrip] failed to cache request body: %w", err)
 	}
 
-	if err = backoff.Retry(
-		t.try(req, body),
-		backoff.WithMaxRetries(backoff.NewExponentialBackOff(), uint64(t.maxRetries)),
-	); err != nil {
+	if err = backoff.RetryNotify(t.try(req, body), t.initBackoff(), t.notifyFunc); err != nil {
 		return nil, err
 	}
 
@@ -62,6 +60,10 @@ func (t *retryTransport) try(req *http.Request, bodyData []byte) backoff.Operati
 
 		return backoff.Permanent(fmt.Errorf(fmtErrNonRetryable, err))
 	}
+}
+
+func (t *retryTransport) initBackoff() backoff.BackOff {
+	return backoff.WithMaxRetries(backoff.NewExponentialBackOff(), uint64(t.maxRetries))
 }
 
 // cache the request body in a new buffer for reuse in each retry
