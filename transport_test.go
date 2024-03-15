@@ -13,6 +13,40 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func Test_retryTransport_RoundTrip(t *testing.T) {
+	t.Run("when the body can't be copied we should return a 'file already close' error", func(t *testing.T) {
+		// create a new file and close it to simulate a closed file
+		f, err := os.Create("file")
+		require.NoError(t, err)
+		f.Close()
+
+		t.Cleanup(func() {
+			os.Remove("file")
+		})
+
+		req := &http.Request{
+			Body: io.NopCloser(f),
+		}
+
+		retryTransport := &retryTransport{
+			transport: http.DefaultTransport,
+		}
+
+		_, err = retryTransport.RoundTrip(req)
+
+		assert.ErrorContains(t, err, "file already closed")
+	})
+}
+
+type stubRoundTripper struct {
+	res *http.Response
+	err error
+}
+
+func (srt *stubRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return srt.res, srt.err
+}
+
 func Test_cacheRequestBody(t *testing.T) {
 	t.Run("when the body has nil value, we should not error", func(t *testing.T) {
 		req := &http.Request{}
@@ -180,38 +214,4 @@ func Test_tryAgain(t *testing.T) {
 
 		assert.True(t, actual)
 	})
-}
-
-func Test_retryTransport_RoundTrip(t *testing.T) {
-	t.Run("when the body can't be copied we should return a 'file already close' error", func(t *testing.T) {
-		// create a new file and close it to simulate a closed file
-		f, err := os.Create("file")
-		require.NoError(t, err)
-		f.Close()
-
-		t.Cleanup(func() {
-			os.Remove("file")
-		})
-
-		req := &http.Request{
-			Body: io.NopCloser(f),
-		}
-
-		retryTransport := &retryTransport{
-			transport: http.DefaultTransport,
-		}
-
-		_, err = retryTransport.RoundTrip(req)
-
-		assert.ErrorContains(t, err, "file already closed")
-	})
-}
-
-type stubRoundTripper struct {
-	res *http.Response
-	err error
-}
-
-func (srt *stubRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
-	return srt.res, srt.err
 }
