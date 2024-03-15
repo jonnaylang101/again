@@ -1,11 +1,16 @@
 package again
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/cenkalti/backoff"
+)
 
 type ClientOptions struct {
 	Transport  http.RoundTripper
 	Whitelist  []int
 	MaxRetries int
+	NotifyFunc backoff.Notify
 }
 
 type ClientOption func(*ClientOptions)
@@ -15,6 +20,7 @@ func NewClient(maxRetries int, options ...ClientOption) *http.Client {
 		Transport:  http.DefaultTransport,
 		Whitelist:  DefaultWhitelist,
 		MaxRetries: maxRetries,
+		NotifyFunc: nil,
 	}
 
 	for _, opt := range options {
@@ -25,6 +31,7 @@ func NewClient(maxRetries int, options ...ClientOption) *http.Client {
 		transport:  ops.Transport,
 		whitelist:  ops.Whitelist,
 		maxRetries: ops.MaxRetries,
+		notifyFunc: ops.NotifyFunc,
 	}
 
 	return &http.Client{
